@@ -25,9 +25,10 @@ SWAPPABLE = False
 FROUND = False
 ADVISE = False
 MEMORY_SAFE = False
+PTC = False
 
 def handle_arg(arg):
-  global ZERO, ASYNC, ASSERTIONS, PROFILING, FROUND, ADVISE, MEMORY_SAFE
+  global ZERO, ASYNC, ASSERTIONS, PROFILING, FROUND, ADVISE, MEMORY_SAFE, PTC
   if '=' in arg:
     l, r = arg.split('=')
     if l == 'ZERO': ZERO = int(r)
@@ -37,6 +38,7 @@ def handle_arg(arg):
     elif l == 'FROUND': FROUND = int(r)
     elif l == 'ADVISE': ADVISE = int(r)
     elif l == 'MEMORY_SAFE': MEMORY_SAFE = int(r)
+    elif l == 'PTC': PTC = int(r)
     return False
   return True
 
@@ -51,7 +53,7 @@ if DEBUG:
 if FROUND:
   shared.Settings.PRECISE_F32 = 1
 
-sys.argv = filter(handle_arg, sys.argv)
+sys.argv = filter(handle_arg, sys.argv);
 
 # consts
 
@@ -228,6 +230,8 @@ OPCODES = [ # l, lx, ly etc - one of 256 locals
   'FSLOWD',    # [lx, lyl, lyh]       lx = ly (double)
   'TSLOW',     # [lxl, lxh, ly]       lx = ly (int or float, not double; lx = lxl,lxh
   'TSLOWD',    # [lxl, lxh, ly]       lx = ly (double; lx = lxl,lxh)
+
+  'HCF',       #                      halt and catch fire (invalid instruction)
 ]
 
 if FROUND:
@@ -442,6 +446,8 @@ CASES[ROPCODES['GETTDP']] = get_access('lx') + ' = tempDoublePtr;'
 CASES[ROPCODES['GETTR0']] = get_access('lx') + ' = tempRet0;'
 CASES[ROPCODES['SETTR0']] = 'tempRet0 = ' + get_coerced_access('lx') + ';'
 
+CASES[ROPCODES['HCF']] = 'assert(0);'
+
 if FROUND:
   CASES[ROPCODES['FROUND']] = get_access('lx', s='d') + ' = Math_fround(' + get_coerced_access('ly', s='d') + ');'
 
@@ -522,6 +528,7 @@ CASES[ROPCODES['TSLOWD']] = get_access('inst >>> 16', s='d') + ' = ' + get_coerc
 opcode_used = {}
 for opcode in OPCODES:
   opcode_used[opcode] = False
+opcode_used['HCF'] = True
 
 def is_function_table(name):
   return name.startswith('FUNCTION_TABLE_')
@@ -624,6 +631,40 @@ def make_emterpreter(zero=False):
     # we increment pc at the top of the loop. to avoid a pc bump, we decrement it first; this is rare, most opcodes just continue; this avoids any code at the end of the loop
     return case.replace('PROCEED_WITH_PC_BUMP', 'continue').replace('PROCEED_WITHOUT_PC_BUMP', 'pc = pc - 4 | 0; continue').replace('continue; continue;', 'continue;')
 
+  def make_func(k):
+    proceed_without_pc_bump = r'''
+  inst = HEAP32[pc>>2]|0;
+  lx = (inst >> 8) & 255;
+  ly = (inst >> 16) & 255;
+  lz = inst >>> 24;
+  return EMTERPRETABLE%s[inst&255](pc|0, %sinst|0, lx|0, ly|0, lz|0);
+''' % (
+  '' if not zero else '_Z',
+  '' if zero else 'sp|0, ',
+)
+    proceed_with_pc_bump = r'''
+  pc = pc + 4 | 0;
+''' + proceed_without_pc_bump
+    code = CASES[k].replace('PROCEED_WITH_PC_BUMP', proceed_with_pc_bump).replace('PROCEED_WITHOUT_PC_BUMP', proceed_without_pc_bump)
+    return r'''
+function emterpret%s_%d(pc, %sinst, lx, ly, lz) {
+  pc = pc | 0;
+  %sinst = inst | 0;
+  lx = lx | 0;
+  ly = ly | 0;
+  lz = lz | 0;
+  if (0) return;
+  %s
+  %s
+}''' % (
+  '' if not zero else '_z',
+  k,
+  '' if zero else 'sp, ',
+  '' if zero else 'sp = sp | 0;\n',
+  code,
+  proceed_with_pc_bump,
+)
+
   def process(code):
     if not ASSERTIONS: code = code.replace(' assert(', ' //assert(')
     if zero: code = code.replace('sp + ', '')
@@ -638,7 +679,14 @@ def make_emterpreter(zero=False):
   //Module.print([pc, inst&255, %s[inst&255], lx, ly, lz, HEAPU8[pc + 4],HEAPU8[pc + 5],HEAPU8[pc + 6],HEAPU8[pc + 7]].join(', '));
 ''' % (json.dumps(OPCODES))
 
-  if not INNERTERPRETER_LAST_OPCODE:
+  if PTC:
+    main_loop = main_loop_prefix + r'''
+  EMTERPRETABLE%s[inst&255](pc|0, %sinst|0, lx|0, ly|0, lz|0);
+  return;''' % (
+    '' if not zero else '_Z',
+    '' if zero else 'sp|0, ',
+  )
+  elif not INNERTERPRETER_LAST_OPCODE:
     main_loop = main_loop_prefix + r'''
   switch (inst&255) {
 %s
@@ -692,7 +740,7 @@ function emterpret%s(pc) {
 %s
  }
  assert(0);
-}''' % (
+}%s''' % (
   '' if not zero else '_z',
   'sp = 0, ' if not zero else '',
   '' if not ASYNC and not MEMORY_SAFE else 'var ld = +0;',
@@ -705,6 +753,7 @@ function emterpret%s(pc) {
   get_access('ly', s='d'),
   ' } else { pc = (HEAP32[sp - 4 >> 2] | 0) - 8 | 0; }' if ASYNC else '',
   main_loop,
+  '' if not PTC else '\n'.join([make_func(k) for k in sorted(CASES.keys()) if opcode_used[OPCODES[k]]]),
 ))
 
 # main
@@ -1036,6 +1085,21 @@ if __name__ == '__main__':
   # finalize funcs JS (first line has the marker, add emterpreters right after that)
   asm.funcs_js = '\n'.join([lines[0], make_emterpreter(), make_emterpreter(zero=True) if ZERO else '', '\n'.join(filter(lambda line: len(line) > 0, lines[1:]))]) + '\n'
   lines = None
+
+  # add emterpretables
+  if PTC:
+    funcs = ['emterpret_%d' % ROPCODES['HCF']] * 256;
+    for k in sorted(CASES.keys()):
+      if opcode_used[OPCODES[k]]:
+        funcs[k] = 'emterpret_%d' % k
+    asm.tables['EMTERPRETABLE'] = '[' + ','.join(funcs) + ']'
+    if ZERO:
+      funcs = ['emterpret_z_%d' % ROPCODES['HCF']] * 256;
+      for k in sorted(CASES.keys()):
+        if opcode_used[OPCODES[k]]:
+          funcs[k] = 'emterpret_z_%d' % k
+      asm.tables['EMTERPRETABLE_Z'] = '[' + ','.join(funcs) + ']'
+    asm.combine_tables()
 
   # set up emterpreter stack top
   asm.set_pre_js(js='var EMTSTACKTOP = STATIC_BASE + %s, EMT_STACK_MAX = EMTSTACKTOP + %d;' % (stack_start, EMT_STACK_MAX))

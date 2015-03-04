@@ -149,7 +149,8 @@ try:
     #JSBenchmarker('sm-noasm',     SPIDERMONKEY_ENGINE + ['--no-asmjs']),
     #JSBenchmarker('sm-noasm-f32', SPIDERMONKEY_ENGINE + ['--no-asmjs'], ['-s', 'PRECISE_F32=2']),
     #JSBenchmarker('v8',           V8_ENGINE),
-    #JSBenchmarker('sm-emterp', SPIDERMONKEY_ENGINE, ['-s', 'EMTERPRETIFY=1', '--memory-init-file', '1']),
+    JSBenchmarker('sm-emterp', SPIDERMONKEY_ENGINE, ['-s', 'EMTERPRETIFY=1', '--memory-init-file', '1']),
+    JSBenchmarker('sm-emterp-ptc', SPIDERMONKEY_ENGINE, ['-s', 'EMTERPRETIFY=1', '-s', 'PTC=1', '--memory-init-file', '1']),
   ]
 except Exception, e:
   benchmarkers_error = str(e)

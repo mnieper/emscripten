@@ -1609,6 +1609,8 @@ try:
         args += ['FROUND=1']
       if shared.Settings.ALLOW_MEMORY_GROWTH:
         args += ['MEMORY_SAFE=1']
+      if shared.Settings.PTC:
+        args += ['PTC=1']
       execute(args)
       final = final + '.em.js'
     finally:

@@ -630,6 +630,8 @@ var USE_SDL = 1; // Specify the SDL version that is being linked against.
 var USE_SDL_IMAGE = 1; // Specify the SDL_image version that is being linked against. Must match USE_SDL
 var USE_ZLIB = 0; // 1 = use zlib from emscripten-ports
 
+// Proper tail calls
+var PTC = 0 // assume asm.js backend supports proper tail calls
 
 // Compiler debugging options
 var DEBUG_TAGS_SHOWING = [];
